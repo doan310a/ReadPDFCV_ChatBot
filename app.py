@@ -20,18 +20,25 @@ openai.api_key = ""
  
 # Function to load candidate data
 def load_candidate_data(file_path):
+    """Load candidate data from an Excel file where each sheet contains a different candidate's information."""
     excel_data = pd.ExcelFile(file_path)
     candidate_data = {}
 
-    # Iterate over each sheet (representing a CV) and dynamically parse its content
+    # Iterate over each sheet (representing a candidate)
     for sheet_name in excel_data.sheet_names:
         sheet_data = excel_data.parse(sheet_name)
 
         # Initialize a dictionary to hold the candidate's information
         candidate_info = {}
 
-        # Iterate through each row, where the first column is the section name, and the second column is the content
+        # Assume the candidate's name is in the first row, adjust as needed
+        candidate_name = sheet_data.iloc[0, 1]  # Assuming name is in the second column of the first row
+        candidate_info["name"] = candidate_name
+
+        # Iterate through each row, starting from row 2, to gather other details
         for index, row in sheet_data.iterrows():
+            if index == 0:  # Skip the first row, which contains the candidate's name
+                continue
             if pd.isna(row.iloc[0]) or pd.isna(row.iloc[1]):
                 continue  # Skip any rows with missing section or content
 
@@ -39,13 +46,11 @@ def load_candidate_data(file_path):
             content = row.iloc[1]  # Content from the second column
             candidate_info[section] = content  # Store the section and its content dynamically
         
-        # Use the sheet name as the candidate's identifier
-        candidate_name = f"Candidate_{sheet_name}"
-        
-        # Store the candidate's data
+        # Store the candidate's data by their name
         candidate_data[candidate_name] = candidate_info
 
     return candidate_data
+
 
 # Load data 
 candidate_data = load_candidate_data('output.xlsx')
@@ -92,30 +97,64 @@ def generate_response_with_cv(question, candidate_name, candidate_data):
     else:
         return "Sorry, I couldn't find any information about that candidate."
 
+ 
+# Function to generate a GPT-4 response based on user message and candidate data
+def generate_gpt4_response_with_data(user_message, candidate_data):
+    """Generate a GPT-4 response based on the user message and candidate data."""
+    try:
+        # Attempt to identify the relevant candidate by checking if their name is in the user message
+        relevant_candidate = None
+        user_message_lower = user_message.lower()  # Normalize user message to lowercase
 
-# Function to generate gpt4 response with data
-def generate_gpt4_response_with_data(question, relevant_info):
-    if relevant_info:
-        relevant_data_str = "\n".join([f"{info}" for info in relevant_info])
+        for candidate_name, candidate_info in candidate_data.items():
+            candidate_name_lower = candidate_name.lower()  # Normalize candidate name to lowercase
+            if candidate_name_lower in user_message_lower:  # Check if candidate's name is in the user message
+                relevant_candidate = candidate_name
+                break
 
-        prompt = (f"You are a helpful chatbot that is analyzing candidate CVs. "
-                  f"The user asked: '{question}'. Here is relevant information from the CVs:\n"
-                  f"{relevant_data_str}\n"
-                  f"Generate a natural response that answers the user's query based on this data.")
-
-        response = openai.ChatCompletion.create(
-            model="gpt-4o",
-            messages=[{"role": "system", "content": prompt}],
-            max_tokens=150,
-            temperature=0.7
-        )
+        # If a relevant candidate is found, provide their information
+        if relevant_candidate:
+            candidate_info = candidate_data[relevant_candidate]
+            prompt = f"The user asked about {relevant_candidate}. Provide relevant information from the following data:\n"
+            
+            for section, content in candidate_info.items():
+                if section != "name":
+                    prompt += f"{section}: {content}\n"
+            
+            # Use GPT-4 Chat API
+            response = openai.ChatCompletion.create(
+                model="gpt-4",  # Ensure you are using the correct model
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that provides information about job candidates."},
+                    {"role": "user", "content": user_message},
+                    {"role": "system", "content": prompt}
+                ],
+                max_tokens=500
+            )
+            
+            return response.choices[0].message['content']
         
-        # Debugging: print the generated response
-        answer = response['choices'][0]['message']['content'].strip()
-        print(f"Generated GPT-4 response: {answer}")
-        return answer
-    else:
-        return generate_gpt4_response(question)
+        # If no relevant candidate is found, return a conversational fallback
+        else:
+            return "I'm sorry, I couldn't find any information on that candidate. Could you try again, or ask me to list all available candidates?"
+    
+    except Exception as e:
+        print(f"Error generating GPT-4 response: {e}")
+        return "Oops, something went wrong on my end. Let me try again!"
+
+
+
+
+# Function to list all available candidates
+def list_all_candidates(candidate_data):
+    """Return a simple list of all candidate names."""
+    if not candidate_data:
+        return "No candidates are available at the moment."
+
+    candidate_list = "Here are the candidates we have:\n"
+    candidate_list += "\n".join(candidate_data.keys())
+    return candidate_list
+
 
 
 
@@ -127,7 +166,7 @@ def generate_gpt4_response(question):
         {"role": "user", "content": question}
     ]
     response = openai.ChatCompletion.create(
-        model="gpt-4o",
+        model="gpt-4",
         messages=messages,
         max_tokens=150,
         temperature=0.7
@@ -165,17 +204,63 @@ def send_message(recipient_id, message_text):
         return response
     except Exception as e:
         print(f"Error sending message: {e}")
+        
 
- 
+# Function to generate a GPT-4 response that handles both general conversation and candidate-related queries
+def generate_gpt4_response_with_context(user_message, candidate_data):
+    """Generate a GPT-4 response that can handle both general conversation and candidate-related queries."""
+    try:
+        # Check if the user is asking to list all candidates
+        if "list" in user_message.lower() and "candidates" in user_message.lower():
+            # Prepare a list of all candidate names
+            prompt = "Here is the list of available candidates:\n"
+            prompt += "\n".join(candidate_data.keys())
+        else:
+            # Detect if the user is asking about a specific candidate
+            candidate_name = None
+            for name in candidate_data.keys():
+                if name.lower() in user_message.lower():  # Match candidate name case-insensitively
+                    candidate_name = name
+                    break
+
+            # If a specific candidate is found, prepare their information
+            if candidate_name:
+                candidate_info = candidate_data[candidate_name]
+                prompt = f"Here is the information about {candidate_name}:\n"
+                for section, content in candidate_info.items():
+                    prompt += f"{section}: {content}\n"
+            else:
+                # Fallback for general queries or if no candidate is found
+                prompt = "I couldn't find any information on the candidate you're asking about. Please try asking for specific candidates or request a list of available candidates."
+
+        # Prepare the system message explicitly stating the purpose of the bot
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant with access to preloaded job candidate information. Your job is to answer user queries based on this preloaded information."},
+            {"role": "user", "content": user_message},
+            {"role": "system", "content": prompt}
+        ]
+
+        # Call GPT-4 with the context
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=messages,
+            max_tokens=500
+        )
+
+        return response.choices[0].message['content']
+    except Exception as e:
+        print(f"Error generating GPT-4 response: {e}")
+        return "Sorry, I'm having trouble processing that right now. Could you try again?"
+
         
 
 # Initialize the Flask app
 app = Flask(__name__)        
         
-
-@app.route("/webhook", methods=["POST"])
 # Function to handle webhook
+@app.route("/webhook", methods=["POST"])
 def handle_webhook():
+    """Function to handle incoming webhook messages from Facebook Messenger."""
     try:
         body = request.get_json()
         print(f"Received payload: {body}")  # Log the entire payload for debugging
@@ -187,25 +272,25 @@ def handle_webhook():
 
                 # Handle messages
                 if "message" in messaging_event and "text" in messaging_event["message"]:
-                    message_text = messaging_event["message"]["text"]
+                    message_text = messaging_event["message"]["text"].lower()  # Normalize to lowercase
                     print(f"Received message: {message_text} from sender {sender_id}")
 
-                    # Find relevant data based on the user's question
-                    candidate_name = list(candidate_data.keys())[0]
-                    relevant_info = find_candidate_info_dynamic(candidate_name, message_text, candidate_data)
-                    print(f"Relevant info: {relevant_info}")  # Debugging
+                    # Check if the user is asking to list all candidates
+                    if "list" in message_text and "candidates" in message_text:
+                        response_message = list_all_candidates(candidate_data)
+                    else:
+                        # Send message to GPT-4 for natural processing (greetings, conversations, and candidate queries)
+                        response_message = generate_gpt4_response_with_context(message_text, candidate_data)
 
-                    # Generate a natural response using GPT-4 and the relevant data
-                    response_message = generate_gpt4_response_with_data(message_text, relevant_info)
                     print(f"Response message: {response_message}")  # Debugging
-
                     send_message_in_chunks(sender_id, response_message)
-                
 
         return "EVENT_RECEIVED", 200
     except Exception as e:
         print(f"Error in webhook handler: {e}")
         return "Error", 500
+
+
 
 
 
