@@ -104,7 +104,7 @@ def generate_gpt4_response_with_data(question, relevant_info):
                   f"Generate a natural response that answers the user's query based on this data.")
 
         response = openai.ChatCompletion.create(
-            model="gpt-4",
+            model="gpt-4o",
             messages=[{"role": "system", "content": prompt}],
             max_tokens=150,
             temperature=0.7
@@ -127,7 +127,7 @@ def generate_gpt4_response(question):
         {"role": "user", "content": question}
     ]
     response = openai.ChatCompletion.create(
-        model="gpt-4",
+        model="gpt-4o",
         messages=messages,
         max_tokens=150,
         temperature=0.7
